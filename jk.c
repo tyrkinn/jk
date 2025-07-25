@@ -209,7 +209,7 @@ void print_line(size_t ln, char* line, struct position *cpos) {
 		cpos->bufpos++;
 		cpos->col++;
 	}
-	printf("\n");
+	putchar('\n');
 	cpos->line++;
 	cpos->col = 0;
 }
