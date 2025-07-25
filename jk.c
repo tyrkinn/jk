@@ -201,6 +201,7 @@ void word_back() {
 		in_word = true;
 	}
 }
+
 int main(int argc, char** argv) {
 	ioctl(0, TIOCGWINSZ, &ws);
 	FILE* file = get_file(argc, argv);
@@ -252,6 +253,19 @@ int main(int argc, char** argv) {
 			case 'b':
 				word_back();
 				print_contents();
+				break;
+			case 'd':
+				if((bytes = read(STDIN_FILENO, buf, 1)) > 0) {
+					if (buf[0] == 'd') {
+						ctx.lines[ctx.pos.line] = NULL;
+						ctx.lines_count--;
+						if (ctx.pos.line - 1 >= 0) {
+							ctx.pos.line--;
+							adjust_col();
+						}
+						print_contents();
+					}
+				};
 				break;
 			default:
 				break;
