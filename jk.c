@@ -4,6 +4,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 #include <termios.h>
+#include <stdbool.h>
 #define CLEAR_SCREEN() printf("\033[2J");
 
 struct position { int line, col, bufpos; };
@@ -18,6 +19,18 @@ struct context {
 
 struct winsize ws;
 struct context ctx;
+
+size_t current_line_len() {
+	return strlen(ctx.lines[ctx.pos.line]);
+}
+
+void adjust_col() {
+	size_t curlen = current_line_len();
+	if (ctx.pos.col >= curlen) {
+		ctx.pos.col = curlen-1;
+	}
+}
+
 
 
 // FILES
@@ -108,15 +121,86 @@ void print_line(size_t ln, char* line, struct position *cpos) {
 void print_contents() {
 	CLEAR_SCREEN();
 	struct position current_pos = {0,0,0};
-	for (size_t i = 0; i < ws.ws_row - 1; ++i) {
+	for (size_t i = 0; i < ws.ws_row - 2; ++i) {
 		if (i < ctx.lines_count) {
 			print_line(i, ctx.lines[i], &current_pos);
 		} else {
 			printf("%zu: \n", i);
 		}
 	}
+	printf("LINE: %d, COL: %d\n", ctx.pos.line, ctx.pos.col);
 }
 
+// TEXT OPERATIONS
+
+void word_next() {
+	bool word_ended = false;
+	char *current_line = ctx.lines[ctx.pos.line];
+	size_t i = ctx.pos.col;
+	for (;i < strlen(current_line); ++i) {
+		if (word_ended) {
+			ctx.pos.col = i;
+			return;
+		}
+		char cur = current_line[i];  
+		if (cur == ' ' || cur == '\n') {
+			word_ended = true;
+		}
+	}
+	if (i >= strlen(current_line)) {
+		if (ctx.pos.line + 1 < ctx.lines_count) {
+			ctx.pos.line++;
+			ctx.pos.col = 0;
+			adjust_col();
+		}
+	}
+}
+
+void word_end() {
+	char *current_line = ctx.lines[ctx.pos.line];
+	if (ctx.pos.col + 1 >= strlen(current_line)) {
+		if (ctx.pos.line + 1 < ctx.lines_count) {
+			ctx.pos.line++;
+			ctx.pos.col = 0;
+			adjust_col();
+		}
+	}
+	size_t i = ctx.pos.col + 1;
+	bool word_ended = current_line[i] != ' ';
+	for (; i <= strlen(current_line); ++i) {
+		char cur = current_line[i];  
+		if (cur == ' ' || i == strlen(current_line)) {
+			if (word_ended) {
+				ctx.pos.col = i - 1;
+				return;
+			}
+			word_ended = true;
+			i++;
+		}
+	}
+}
+
+void word_back() {
+	if (ctx.pos.col == 0 && ctx.pos.line - 1 >= 0) {
+		ctx.pos.line--;
+		ctx.pos.col = strlen(ctx.lines[ctx.pos.line]) - 1;
+	}
+	char *current_line = ctx.lines[ctx.pos.line];
+	int i = ctx.pos.col - 1; 
+	bool in_word = current_line[i] != ' ';
+	for (;i >= 0; i--) {
+		char cur = current_line[i];
+		if (in_word) {
+			if (cur == ' ' || i == 0) {
+				ctx.pos.col = i == 0 ? i : i + 1;
+				return;
+			}
+			continue;
+		}
+		i--;
+		in_word = true;
+	}
+}
 int main(int argc, char** argv) {
 	ioctl(0, TIOCGWINSZ, &ws);
 	FILE* file = get_file(argc, argv);
@@ -126,21 +210,18 @@ int main(int argc, char** argv) {
 	uint8_t buf[1];
 	ssize_t bytes;
 	print_contents();
-	size_t current_line_len;
 	while ((bytes = read(STDIN_FILENO, buf, 1)) > 0) {
 		char key = buf[0];
 		switch (key) {
 			case 'q':
 				goto shutdown;
 			case 'l':
-				current_line_len = strlen(ctx.lines[ctx.pos.line]);
-				if (ctx.pos.col + 1 < current_line_len) {
+				if (ctx.pos.col + 1 < current_line_len()) {
 					ctx.pos.col++;
 				}
 				print_contents();
 				break;
 			case 'h':
-				current_line_len = strlen(ctx.lines[ctx.pos.line]);
 				if (ctx.pos.col - 1 >= 0) {
 					ctx.pos.col--;
 				}
@@ -150,12 +231,26 @@ int main(int argc, char** argv) {
 				if (ctx.pos.line + 1 < ctx.lines_count) {
 					ctx.pos.line++;
 				}
+				adjust_col();
 				print_contents();
 				break;
 			case 'k':
 				if (ctx.pos.line - 1 >= 0) {
 					ctx.pos.line--;
 				}
+				adjust_col();
+				print_contents();
+				break;
+			case 'w':
+				word_next();
+				print_contents();
+				break;
+			case 'e':
+				word_end();
+				print_contents();
+				break;
+			case 'b':
+				word_back();
 				print_contents();
 				break;
 			default:
