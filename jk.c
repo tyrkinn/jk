@@ -7,7 +7,48 @@
 #include <stdbool.h>
 #define CLEAR_SCREEN() printf("\033[2J");
 
+#define SELECTION_BG "15"
+#define SELECTION_FG "0"
+#define FOCUS_FG "160"
+
+enum editor_mode {
+	NORMAL,
+	INSERT,
+	VISUAL,
+	COMMAND
+};
+
+char* mode_to_string(enum editor_mode mode) {
+	switch (mode) {
+		case NORMAL:
+			return "NORMAL";
+		case INSERT:
+			return "INSERT";
+		case VISUAL:
+			return "VISUAL";
+		case COMMAND:
+			return "COMMAND";
+	}
+}
+
+int cmp(int a, int b) {
+	if (a < b) return -1;
+	if (a > b) return 1;
+	return 0;
+}
+
 struct position { int line, col, bufpos; };
+int pos_cmp(struct position pos1, struct position pos2) {
+	if (pos1.line == pos2.line) {
+		return cmp(pos1.col, pos2.col);
+	}
+	if (pos1.line > pos2.line) {
+		return 1;
+	}
+	return -1;
+}
+
+struct selection { struct position from; struct position to;};
 
 struct context {
 	FILE* f;
@@ -15,10 +56,30 @@ struct context {
 	char** lines;
 	size_t lines_count;
 	struct position pos;
+	struct selection sel;
+	enum editor_mode mode;
 };
-
 struct winsize ws;
 struct context ctx;
+
+bool in_range(struct position pos, struct position from, struct position to) {
+	if (pos.line == from.line && pos.line == to.line) {
+		return pos.col >= from.col && pos.col <= to.col;
+	} else if (pos.line == from.line) {
+		return pos.col >= from.col;
+	} else if (pos.line == to.line) {
+		return pos.col <= to.col;
+	} else {
+		return pos.line >= from.line && pos.line <= to.line;
+	}
+}
+
+bool in_selection(struct position pos) {
+	if (pos_cmp(ctx.sel.from, ctx.sel.to) >= 0) {
+		return in_range(pos, ctx.sel.to, ctx.sel.from);
+	}
+	return in_range(pos, ctx.sel.from, ctx.sel.to);
+}
 
 size_t current_line_len() {
 	return strlen(ctx.lines[ctx.pos.line]);
@@ -30,6 +91,7 @@ void adjust_col() {
 		ctx.pos.col = curlen-1;
 	}
 }
+
 
 
 
@@ -69,6 +131,25 @@ char** read_all_lines(char* source) {
 	return lines;
 };
 
+// SELECTION
+
+void start_selection() {
+	ctx.sel.from = ctx.pos;
+	ctx.sel.to = ctx.pos;
+}
+
+void expand_selection() {
+	if (ctx.mode != VISUAL) {
+		return;
+	}
+	ctx.sel.to = ctx.pos;
+}
+
+void clear_selection() {
+	struct selection sel = {{-1,-1,-1}, {-1,-1,-1}};
+	ctx.sel = sel;
+}
+
 // CONTEXT
 
 void init_context(FILE* file) {
@@ -77,6 +158,9 @@ void init_context(FILE* file) {
 	ctx.lines = read_all_lines(ctx.contents);
 	struct position pos = {0,0,0};
 	ctx.pos = pos;
+	struct selection sel = {{-1,-1,-1}, {-1,-1,-1}};
+	ctx.sel = sel;
+	ctx.mode = NORMAL;
 }
 
 void free_context() {
@@ -97,19 +181,31 @@ void enable_non_canonical() {
 // DISPLAYING
 //
 
-void ccolored(char c) {
-	printf("\033[31;1;4m%c\033[0m", c);
+void ccolored(char c, char* fgColor, char* bgColor) {
+	if (fgColor != NULL && bgColor != NULL) {
+		printf("\033[38;5;%s;48;5;%sm%c\033[0m", fgColor, bgColor, c);
+	} else if (fgColor != NULL) {
+		printf("\033[38;5;%sm%c\033[0m", fgColor, c);
+	} else if (bgColor != NULL) {
+		printf("\033[48;5;%sm%c\033[0m", bgColor, c);
+	}
 }
+
 
 void print_line(size_t ln, char* line, struct position *cpos) {
 	size_t line_len = strlen(line);
 	printf("%zu: ", ln);
 	for (size_t i = 0; i < line_len; ++i) {
-		if (cpos->line == ctx.pos.line && cpos->col == ctx.pos.col) {
-			ccolored(line[i]);
-		} else {
-			printf("%c", line[i]);
+		if (in_selection(*cpos)) {
+			ccolored(line[i], SELECTION_FG, SELECTION_BG);
+			goto loopend;
 		}
+		if (cpos->line == ctx.pos.line && cpos->col == ctx.pos.col) {
+			ccolored(line[i], FOCUS_FG, NULL);
+		} else {
+			putchar(line[i]);
+		}
+	loopend:
 		cpos->bufpos++;
 		cpos->col++;
 	}
@@ -128,7 +224,10 @@ void print_contents() {
 			printf("%zu: \n", i);
 		}
 	}
-	printf("LINE: %d, COL: %d\n", ctx.pos.line, ctx.pos.col);
+	printf("LINE: %d, COL: %d, MODE: %s, SELECTION f:%d:%d t:%d:%d\n", 
+				ctx.pos.line, ctx.pos.col, mode_to_string(ctx.mode), 
+				ctx.sel.from.line, ctx.sel.from.col,
+				ctx.sel.to.line, ctx.sel.to.col);
 }
 
 // TEXT OPERATIONS
@@ -220,12 +319,14 @@ int main(int argc, char** argv) {
 				if (ctx.pos.col + 1 < current_line_len()) {
 					ctx.pos.col++;
 				}
+				expand_selection();
 				print_contents();
 				break;
 			case 'h':
 				if (ctx.pos.col - 1 >= 0) {
 					ctx.pos.col--;
 				}
+				expand_selection();
 				print_contents();
 				break;
 			case 'j':
@@ -233,6 +334,7 @@ int main(int argc, char** argv) {
 					ctx.pos.line++;
 				}
 				adjust_col();
+				expand_selection();
 				print_contents();
 				break;
 			case 'k':
@@ -240,18 +342,27 @@ int main(int argc, char** argv) {
 					ctx.pos.line--;
 				}
 				adjust_col();
+				expand_selection();
 				print_contents();
 				break;
 			case 'w':
 				word_next();
+				expand_selection();
 				print_contents();
 				break;
 			case 'e':
 				word_end();
+				expand_selection();
 				print_contents();
 				break;
 			case 'b':
 				word_back();
+				expand_selection();
+				print_contents();
+				break;
+			case 'v':
+				ctx.mode = VISUAL;
+				start_selection();
 				print_contents();
 				break;
 			case 'd':
@@ -266,6 +377,11 @@ int main(int argc, char** argv) {
 						print_contents();
 					}
 				};
+				break;
+			case 27:
+				ctx.mode = NORMAL;
+				clear_selection();
+				print_contents();
 				break;
 			default:
 				break;
