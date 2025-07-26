@@ -52,6 +52,14 @@ int pos_cmp(struct position pos1, struct position pos2) {
 
 struct selection { struct position from; struct position to;};
 
+void normalize_selection(struct selection *sel) {
+	if (pos_cmp(sel->from, sel->to) == 1) {
+		struct position temp = sel->from;
+		sel->from = sel->to;
+		sel->to = temp;
+	}
+}
+
 struct context {
 	FILE* f;
 	char* contents;
@@ -235,10 +243,12 @@ void print_contents() {
 void word_next() {
 	bool word_ended = false;
 	char *current_line = ctx.lines[ctx.pos.line];
-	size_t i = ctx.pos.col;
+	size_t initial_col = ctx.pos.col;
+	size_t i = initial_col;
 	for (;i < strlen(current_line); ++i) {
 		if (word_ended) {
 			ctx.pos.col = i;
+			ctx.pos.bufpos += i - initial_col;
 			return;
 		}
 		char cur = current_line[i];  
@@ -248,6 +258,7 @@ void word_next() {
 	}
 	if (i >= strlen(current_line)) {
 		if (ctx.pos.line + 1 < ctx.lines_count) {
+			ctx.pos.bufpos += current_line_len() - ctx.pos.col + 1;
 			ctx.pos.line++;
 			ctx.pos.col = 0;
 			adjust_col();
@@ -259,18 +270,21 @@ void word_end() {
 	char *current_line = ctx.lines[ctx.pos.line];
 	if (ctx.pos.col + 1 >= strlen(current_line)) {
 		if (ctx.pos.line + 1 < ctx.lines_count) {
+			ctx.pos.bufpos += current_line_len() - ctx.pos.col + 1;
 			ctx.pos.line++;
 			ctx.pos.col = 0;
 			adjust_col();
 		}
 	}
-	size_t i = ctx.pos.col + 1;
+	size_t initial_col = ctx.pos.col;
+	size_t i = initial_col + 1;
 	bool word_ended = current_line[i] != ' ';
 	for (; i <= strlen(current_line); ++i) {
 		char cur = current_line[i];  
 		if (cur == ' ' || i == strlen(current_line)) {
 			if (word_ended) {
 				ctx.pos.col = i - 1;
+				ctx.pos.bufpos += i - 1 - initial_col;
 				return;
 			}
 			word_ended = true;
@@ -281,17 +295,21 @@ void word_end() {
 
 void word_back() {
 	if (ctx.pos.col == 0 && ctx.pos.line - 1 >= 0) {
+		int initial_col = ctx.pos.col;
 		ctx.pos.line--;
 		ctx.pos.col = strlen(ctx.lines[ctx.pos.line]) - 1;
+		ctx.pos.bufpos -= initial_col + current_line_len() - ctx.pos.col + 1;
 	}
 	char *current_line = ctx.lines[ctx.pos.line];
-	int i = ctx.pos.col - 1; 
+	int initial_col = ctx.pos.col;
+	int i = initial_col - 1; 
 	bool in_word = current_line[i] != ' ';
 	for (;i >= 0; i--) {
 		char cur = current_line[i];
 		if (in_word) {
 			if (cur == ' ' || i == 0) {
 				ctx.pos.col = i == 0 ? i : i + 1;
+				ctx.pos.bufpos -= initial_col - (i == 0 ? i : i + 1); 
 				return;
 			}
 			continue;
@@ -318,6 +336,7 @@ int main(int argc, char** argv) {
 			case 'l':
 				if (ctx.pos.col + 1 < current_line_len()) {
 					ctx.pos.col++;
+					ctx.pos.bufpos++;
 				}
 				expand_selection();
 				print_contents();
@@ -325,23 +344,27 @@ int main(int argc, char** argv) {
 			case 'h':
 				if (ctx.pos.col - 1 >= 0) {
 					ctx.pos.col--;
+					ctx.pos.bufpos--;
 				}
 				expand_selection();
 				print_contents();
 				break;
 			case 'j':
-				if (ctx.pos.line + 1 < ctx.lines_count) {
-					ctx.pos.line++;
-				}
+				if (ctx.pos.line + 1 >= ctx.lines_count) break;
+				int line_est_chars = current_line_len() - ctx.pos.col;
+				ctx.pos.line++;
 				adjust_col();
+				ctx.pos.bufpos += line_est_chars + ctx.pos.col + 1;
 				expand_selection();
 				print_contents();
 				break;
 			case 'k':
-				if (ctx.pos.line - 1 >= 0) {
-					ctx.pos.line--;
-				}
+				if (ctx.pos.line - 1 < 0) break;
+				int initial_col = ctx.pos.col;
+				ctx.pos.line--;
 				adjust_col();
+				line_est_chars = current_line_len() - ctx.pos.col;
+				ctx.pos.bufpos -= initial_col + line_est_chars + 1;
 				expand_selection();
 				print_contents();
 				break;
@@ -365,6 +388,9 @@ int main(int argc, char** argv) {
 				start_selection();
 				print_contents();
 				break;
+			case 'x':
+
+				break;
 			case 'd':
 				switch (ctx.mode) {
 					case NORMAL:
@@ -381,7 +407,16 @@ int main(int argc, char** argv) {
 						};
 						break;
 					case INSERT: break;
-					case VISUAL: break;
+					case VISUAL: 
+						// normalize_selection(&ctx.sel);
+						// char* slice = ctx.contents + ctx.sel.from.bufpos;
+						// int delete_size = ctx.sel.to.bufpos - ctx.sel.from.bufpos;
+						// memmove(slice, slice+delete_size+1, 1+strlen(slice + delete_size));
+						// clear_selection();
+						// ctx.mode = NORMAL;
+						// ctx.lines = read_all_lines(ctx.contents);
+						// print_contents();
+						break;
 					case COMMAND: break;
 				}
 				break;
