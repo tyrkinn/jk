@@ -11,6 +11,8 @@
 #define SELECTION_FG "0"
 #define FOCUS_FG "160"
 
+#define ESCAPE 27
+
 enum editor_mode {
 	NORMAL,
 	INSERT,
@@ -65,13 +67,14 @@ struct context ctx;
 bool in_range(struct position pos, struct position from, struct position to) {
 	if (pos.line == from.line && pos.line == to.line) {
 		return pos.col >= from.col && pos.col <= to.col;
-	} else if (pos.line == from.line) {
+	} 
+	if (pos.line == from.line) {
 		return pos.col >= from.col;
-	} else if (pos.line == to.line) {
+	} 
+	if (pos.line == to.line) {
 		return pos.col <= to.col;
-	} else {
-		return pos.line >= from.line && pos.line <= to.line;
-	}
+	} 
+	return pos.line >= from.line && pos.line <= to.line;
 }
 
 bool in_selection(struct position pos) {
@@ -91,9 +94,6 @@ void adjust_col() {
 		ctx.pos.col = curlen-1;
 	}
 }
-
-
-
 
 // FILES
 
@@ -224,8 +224,8 @@ void print_contents() {
 			printf("%zu: \n", i);
 		}
 	}
-	printf("LINE: %d, COL: %d, MODE: %s, SELECTION f:%d:%d t:%d:%d\n", 
-				ctx.pos.line, ctx.pos.col, mode_to_string(ctx.mode), 
+	printf("LINE: %d, COL: %d, BPOS: %d, MODE: %s, SELECTION f:%d:%d t:%d:%d\n", 
+				ctx.pos.line, ctx.pos.col, ctx.pos.bufpos, mode_to_string(ctx.mode), 
 				ctx.sel.from.line, ctx.sel.from.col,
 				ctx.sel.to.line, ctx.sel.to.col);
 }
@@ -307,7 +307,7 @@ int main(int argc, char** argv) {
 	init_context(file);
 	enable_non_canonical();
 
-	uint8_t buf[1];
+	char buf[1];
 	ssize_t bytes;
 	print_contents();
 	while ((bytes = read(STDIN_FILENO, buf, 1)) > 0) {
@@ -366,19 +366,26 @@ int main(int argc, char** argv) {
 				print_contents();
 				break;
 			case 'd':
-				if((bytes = read(STDIN_FILENO, buf, 1)) > 0) {
-					if (buf[0] == 'd') {
-						ctx.lines[ctx.pos.line] = NULL;
-						ctx.lines_count--;
-						if (ctx.pos.line - 1 >= 0) {
-							ctx.pos.line--;
-							adjust_col();
-						}
-						print_contents();
-					}
-				};
+				switch (ctx.mode) {
+					case NORMAL:
+						if((bytes = read(STDIN_FILENO, buf, 1)) > 0) {
+							if (buf[0] == 'd') {
+								ctx.lines[ctx.pos.line] = NULL;
+								ctx.lines_count--;
+								if (ctx.pos.line - 1 >= 0) {
+									ctx.pos.line--;
+									adjust_col();
+								}
+								print_contents();
+							}
+						};
+						break;
+					case INSERT: break;
+					case VISUAL: break;
+					case COMMAND: break;
+				}
 				break;
-			case 27:
+			case ESCAPE:
 				ctx.mode = NORMAL;
 				clear_selection();
 				print_contents();
